@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "dev.b_p40lz.autopve.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "ExampleMixin",
+    "ServerboundMovePlayerPacketAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
