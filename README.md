@@ -1,1 +1,1 @@
-Addon for lblt.xyz pve mode
+autopve for lblt.xyz pve server

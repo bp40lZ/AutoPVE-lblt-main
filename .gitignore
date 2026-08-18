@@ -1,5 +1,6 @@
 # Gradle
 .gradle/
+.gradle-local/
 build/
 out/
 
@@ -15,3 +16,4 @@ run/
 # OS
 .DS_Store
 Thumbs.db
+.opencode

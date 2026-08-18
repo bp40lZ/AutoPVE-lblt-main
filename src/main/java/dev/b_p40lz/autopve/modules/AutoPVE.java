@@ -1,9 +1,9 @@
 package dev.b_p40lz.autopve.modules;
 
 import dev.b_p40lz.autopve.AddonTemplate;
+import dev.b_p40lz.autopve.mixin.HandledScreenAccessor;
 import dev.b_p40lz.autopve.mixin.ServerboundMovePlayerPacketAccessor;
 import dev.b_p40lz.autopve.utils.MSTimer;
-import dev.b_p40lz.autopve.utils.TPUtil;
 import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
@@ -15,40 +15,34 @@ import meteordevelopment.meteorclient.settings.IntSetting;//
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.StringSetting;
-import meteordevelopment.meteorclient.settings.Vector3dSetting;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
+import net.minecraft.client.input.MouseInput;
 import net.minecraft.client.network.ServerAddress;
 import net.minecraft.client.network.ServerInfo;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.decoration.ArmorStandEntity;
+import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
+import net.minecraft.registry.Registries;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.screen.slot.Slot;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.Vec3d;
 import org.apache.commons.lang3.tuple.Pair;
-import org.joml.Vector3d;
+import org.lwjgl.glfw.GLFW;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.Set;
-import java.util.UUID;
+import java.util.Locale;
 
 public class AutoPVE extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -85,19 +79,12 @@ public class AutoPVE extends Module {
         .build()
     );
 
-    private final Setting<Double> yOffset = sgGeneral.add(new DoubleSetting.Builder()
-        .name("y-offset")
-        .description("The vertical offset above the target's head.")
-        .defaultValue(5)
-        .range(0, 20)
-        .build()
-    );
-
-    private final Setting<Double> stepDistance = sgGeneral.add(new DoubleSetting.Builder()
-        .name("step-distance")
-        .description("Distance per TP segment.")
-        .defaultValue(5)
-        .range(0.5, 20)
+    private final Setting<Double> flightSpeed = sgGeneral.add(new DoubleSetting.Builder()
+        .name("flight-speed")
+        .description("Velocity used while flying between route points.")
+        .defaultValue(9)
+        .range(0.05, 10.0)
+        .sliderRange(0.05, 12.0)
         .build()
     );
 
@@ -117,14 +104,6 @@ public class AutoPVE extends Module {
         .build()
     );
 
-    private final Setting<Integer> timeout = sgGeneral.add(new IntSetting.Builder()
-        .name("timeout")
-        .description("Skips a target if it hasn't died after this many seconds.")
-        .defaultValue(2)
-        .range(1, 60)
-        .build()
-    );
-
     private final Setting<Boolean> noGround = sgGeneral.add(new BoolSetting.Builder()
         .name("no-ground")
         .description("Forces all movement packets to send onGround=false.")
@@ -132,56 +111,72 @@ public class AutoPVE extends Module {
         .build()
     );
 
-    private final Setting<Integer> maxTargets = sgGeneral.add(new IntSetting.Builder()
-        .name("max-targets")
-        .description("Maximum targets to attack at once.")
-        .defaultValue(5)
-        .range(1, 20)
+    private final Setting<Boolean> keepDiamond = sgGeneral.add(new BoolSetting.Builder()
+        .name("diamond")
+        .description("Keep diamond items. Disable to automatically discard them.")
+        .defaultValue(true)
         .build()
     );
 
-    private final Setting<Vector3d> areaPos1 = sgGeneral.add(new Vector3dSetting.Builder()
-        .name("area-pos-1")
-        .description("First corner of the attack area.")
-        .defaultValue(-8, 39, 57)
+    private final Setting<Boolean> keepGolden = sgGeneral.add(new BoolSetting.Builder()
+        .name("golden")
+        .description("Keep gold items. Disable to automatically discard them.")
+        .defaultValue(true)
         .build()
     );
 
-    private final Setting<Vector3d> areaPos2 = sgGeneral.add(new Vector3dSetting.Builder()
-        .name("area-pos-2")
-        .description("Second corner of the attack area.")
-        .defaultValue(-165, 15, 0)
+    private final Setting<Boolean> keepCopper = sgGeneral.add(new BoolSetting.Builder()
+        .name("copper")
+        .description("Keep copper items. Disable to automatically discard them.")
+        .defaultValue(true)
         .build()
     );
 
-    private static final List<String> BLOCKED_NAMES = List.of("核心", "炮塔", "战斗兵", "治疗兵", "地刺", "弓兵", "煤球炮", "音波炮");
-    private static final Random RANDOM = new Random();
+    private static final Vec3d INIT_WAYPOINT_1 = new Vec3d(25, 20, 30);
+    private static final Vec3d INIT_WAYPOINT_2 = new Vec3d(20, 38, 30);
+    private static final Vec3d INIT_WAYPOINT_3 = new Vec3d(-100, 40, 30);
+    private static final Vec3d ROUTE_START = new Vec3d(-100, 17.1, 65);
+    private static final Vec3d ROUTE_END = new Vec3d(-100, 17.1, 0);
+    private static final double ROUTE_ARRIVAL_DISTANCE_SQR = 2.25;
+    private static final double ATTACK_RANGE_SQR = 25.0;
+    private static final int PVE_MENU_SLOT = 15;
+    private static final long PVE_HOVER_DELAY_MS = 150;
 
-    private final Set<UUID> skipped = new HashSet<>();
-    private final Map<UUID, Long> attackTimes = new HashMap<>();
-    private int targetIndex;
     private Pair<ServerAddress, ServerInfo> lastServer;
     private final MSTimer reconnectTimer = new MSTimer();
     private boolean reconnectPending;
     private boolean loggedIn;
     private boolean loginSelectPending;
     private boolean guiOpenPending;
+    private int hoveredPveSlotId = -1;
+    private boolean pveClickSent;
+    private boolean headingToRouteEnd;
+    private RoutePhase routePhase = RoutePhase.INIT_WAYPOINT_1;
     private final MSTimer selectTimer = new MSTimer();
 
+    private enum RoutePhase {
+        INIT_WAYPOINT_1,
+        INIT_WAYPOINT_2,
+        INIT_WAYPOINT_3,
+        ENTER_LOOP,
+        LOOP
+    }
+
     public AutoPVE() {
-        super(AddonTemplate.CATEGORY, "auto-pve", "autopve.");
+        super(AddonTemplate.CATEGORY, "auto-pve", "autopve");
         runInMainMenu = true;
     }
 
     @Override
     public void onDeactivate() {
-        skipped.clear();
-        attackTimes.clear();
-        targetIndex = 0;
         reconnectPending = false;
         loggedIn = false;
         loginSelectPending = false;
         guiOpenPending = false;
+        hoveredPveSlotId = -1;
+        pveClickSent = false;
+        resetRoute();
+        stopRouteMovement();
     }
 
     @EventHandler
@@ -192,29 +187,80 @@ public class AutoPVE extends Module {
         if (mc.player == null || mc.world == null) return;
         if (loginSelectPending || guiOpenPending) return;
 
-        List<LivingEntity> targets = findTargets();
-        if (targets.isEmpty()) return;
+        flyRoute();
+        attackNearbyEntities();
+        discardDisabledMaterials();
+    }
 
-        for (int i = 0; i < targets.size(); i++) {
-            LivingEntity target = targets.get((targetIndex + i) % targets.size());
-            long now = System.currentTimeMillis();
-            long start = attackTimes.computeIfAbsent(target.getUuid(), k -> now);
-            if (now - start > timeout.get() * 1000L) {
-                skipped.add(target.getUuid());
-                attackTimes.remove(target.getUuid());
-                continue;
-            }
+    private void flyRoute() {
+        initializeRoutePhase();
 
-            Vec3d playerPos = mc.player.getEntityPos();
-            Vec3d targetVec = target.getEntityPos().add(0, target.getHeight(), 0);
-            double angle = RANDOM.nextDouble() * Math.PI * 2;
-            double radius = RANDOM.nextDouble() * 2.0;
-            Vec3d attackPos = targetVec.add(Math.cos(angle) * radius, yOffset.get(), Math.sin(angle) * radius);
-
-            targetIndex = (targetIndex + 1) % targets.size();
-            TPUtil.doTpMove(playerPos, attackPos, stepDistance.get(), true, () -> doAttack(target));
-            break;
+        if (routePhase != RoutePhase.LOOP) {
+            flyInitialRoute();
+            return;
         }
+
+        Vec3d target = headingToRouteEnd ? ROUTE_END : ROUTE_START;
+        if (mc.player.squaredDistanceTo(target) <= ROUTE_ARRIVAL_DISTANCE_SQR) {
+            headingToRouteEnd = !headingToRouteEnd;
+            stopRouteMovement();
+            return;
+        }
+
+        flyTowards(target);
+    }
+
+    private void initializeRoutePhase() {
+        if (routePhase != RoutePhase.INIT_WAYPOINT_1) return;
+
+        if (mc.player.squaredDistanceTo(ROUTE_START) <= ROUTE_ARRIVAL_DISTANCE_SQR) {
+            routePhase = RoutePhase.LOOP;
+            headingToRouteEnd = true;
+        } else if (mc.player.squaredDistanceTo(ROUTE_END) <= ROUTE_ARRIVAL_DISTANCE_SQR) {
+            routePhase = RoutePhase.LOOP;
+            headingToRouteEnd = false;
+        }
+    }
+
+    private void flyInitialRoute() {
+        Vec3d target = switch (routePhase) {
+            case INIT_WAYPOINT_1 -> INIT_WAYPOINT_1;
+            case INIT_WAYPOINT_2 -> INIT_WAYPOINT_2;
+            case INIT_WAYPOINT_3 -> INIT_WAYPOINT_3;
+            case ENTER_LOOP -> ROUTE_END;
+            case LOOP -> throw new IllegalStateException("Loop phase handled separately");
+        };
+
+        if (mc.player.squaredDistanceTo(target) <= ROUTE_ARRIVAL_DISTANCE_SQR) {
+            routePhase = switch (routePhase) {
+                case INIT_WAYPOINT_1 -> RoutePhase.INIT_WAYPOINT_2;
+                case INIT_WAYPOINT_2 -> RoutePhase.INIT_WAYPOINT_3;
+                case INIT_WAYPOINT_3 -> RoutePhase.ENTER_LOOP;
+                case ENTER_LOOP -> RoutePhase.LOOP;
+                case LOOP -> RoutePhase.LOOP;
+            };
+            if (routePhase == RoutePhase.LOOP) headingToRouteEnd = false;
+            stopRouteMovement();
+            return;
+        }
+
+        flyTowards(target);
+    }
+
+    private void flyTowards(Vec3d target) {
+        Vec3d difference = target.subtract(mc.player.getEntityPos());
+        double speed = Math.min(flightSpeed.get(), difference.length());
+        mc.player.setVelocity(difference.normalize().multiply(speed));
+        mc.player.setOnGround(false);
+    }
+
+    private void resetRoute() {
+        headingToRouteEnd = false;
+        routePhase = RoutePhase.INIT_WAYPOINT_1;
+    }
+
+    private void stopRouteMovement() {
+        if (mc.player != null) mc.player.setVelocity(Vec3d.ZERO);
     }
 
     @EventHandler
@@ -222,9 +268,9 @@ public class AutoPVE extends Module {
         reconnectPending = false;
         loginSelectPending = false;
         guiOpenPending = false;
-        skipped.clear();
-        attackTimes.clear();
-        targetIndex = 0;
+        hoveredPveSlotId = -1;
+        pveClickSent = false;
+        resetRoute();
 
         ServerInfo server = mc.getCurrentServerEntry();
         if (server != null) {
@@ -270,11 +316,11 @@ public class AutoPVE extends Module {
 
         if (loginSelectPending) {
             if (selectTimer.hasPassTime(selectDelay.get() * 1000L)) {
-                mc.player.getInventory().setSelectedSlot(selectSlot.get());
-                mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                mc.player.swingHand(Hand.MAIN_HAND);
+                openServerSelector();
                 loginSelectPending = false;
                 guiOpenPending = true;
+                hoveredPveSlotId = -1;
+                pveClickSent = false;
                 selectTimer.reset();
             }
             return;
@@ -283,32 +329,73 @@ public class AutoPVE extends Module {
         if (guiOpenPending) {
             Screen screen = mc.currentScreen;
             if (screen == null) {
-                guiOpenPending = false;
-                return;
-            }
-
-            if (!(screen instanceof HandledScreen<?> containerScreen)) {
                 if (selectTimer.hasPassTime(2000)) {
-                    mc.player.getInventory().setSelectedSlot(selectSlot.get());
-                    mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-                    mc.player.swingHand(Hand.MAIN_HAND);
+                    hoveredPveSlotId = -1;
+                    pveClickSent = false;
+                    openServerSelector();
                     selectTimer.reset();
                 }
                 return;
             }
 
-            if (selectTimer.hasPassTime(1000)) {
-                ScreenHandler menu = containerScreen.getScreenHandler();
-                for (Slot slot : menu.slots) {
-                    ItemStack stack = slot.getStack();
-                    if (!stack.isEmpty() && stack.getName().getString().toLowerCase().contains("pve")) {
-                        mc.interactionManager.clickSlot(menu.syncId, slot.id, 0, SlotActionType.PICKUP, mc.player);
-                        selectTimer.reset();
-                        break;
-                    }
+            if (!(screen instanceof HandledScreen<?> containerScreen)) {
+                if (selectTimer.hasPassTime(2000)) {
+                    openServerSelector();
+                    selectTimer.reset();
                 }
+                return;
+            }
+
+            ScreenHandler menu = containerScreen.getScreenHandler();
+            Slot pveSlot = findPveSlot(menu);
+            if (pveSlot == null) {
+                hoveredPveSlotId = -1;
+                return;
+            }
+
+            if (pveClickSent) return;
+
+            HandledScreenAccessor accessor = (HandledScreenAccessor) containerScreen;
+            double mouseX = accessor.autopve$getX() + pveSlot.x + 8;
+            double mouseY = accessor.autopve$getY() + pveSlot.y + 8;
+
+            if (hoveredPveSlotId != pveSlot.id) {
+                double scale = mc.getWindow().getScaleFactor();
+                GLFW.glfwSetCursorPos(mc.getWindow().getHandle(), mouseX * scale, mouseY * scale);
+                hoveredPveSlotId = pveSlot.id;
+                selectTimer.reset();
+                return;
+            }
+
+            if (selectTimer.hasPassTime(PVE_HOVER_DELAY_MS)) {
+                Click click = new Click(mouseX, mouseY, new MouseInput(GLFW.GLFW_MOUSE_BUTTON_LEFT, 0));
+                if (!containerScreen.mouseClicked(click, false)) {
+                    mc.interactionManager.clickSlot(menu.syncId, pveSlot.id, 0, SlotActionType.PICKUP, mc.player);
+                }
+                hoveredPveSlotId = -1;
+                pveClickSent = true;
+                selectTimer.reset();
             }
         }
+    }
+
+    private void openServerSelector() {
+        mc.player.getInventory().setSelectedSlot(selectSlot.get());
+        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+        mc.player.swingHand(Hand.MAIN_HAND);
+    }
+
+    private Slot findPveSlot(ScreenHandler menu) {
+        if (menu.slots.size() > PVE_MENU_SLOT) {
+            Slot fixedSlot = menu.slots.get(PVE_MENU_SLOT);
+            if (!fixedSlot.getStack().isEmpty()) return fixedSlot;
+        }
+
+        for (Slot slot : menu.slots) {
+            ItemStack stack = slot.getStack();
+            if (!stack.isEmpty() && stack.getName().getString().toLowerCase().contains("pve")) return slot;
+        }
+        return null;
     }
 
     private void handleReconnect() {
@@ -323,82 +410,47 @@ public class AutoPVE extends Module {
         }
     }
 
-    private List<LivingEntity> findTargets() {
-        if (skipped.size() > 50) skipped.clear();
-
-        List<LivingEntity> targets = new ArrayList<>();
-        List<Entity> visibleEntities = new ArrayList<>();
-        for (Entity entity : mc.world.getEntities()) visibleEntities.add(entity);
-
-        for (Entity entity : visibleEntities) {
+    private void attackNearbyEntities() {
+        for (Entity entity : mc.world.getEntities()) {
             if (entity instanceof ItemEntity) continue;
-            if (!(entity instanceof LivingEntity le)) continue;
-            if (le instanceof PlayerEntity) continue;
-            if (le instanceof ArmorStandEntity) continue;
-            if (le.isRemoved() || le.getHealth() <= 0) continue;
-            if (skipped.contains(le.getUuid())) continue;
-            if (!isInArea(le)) continue;
-            if (hasBlockedName(le, visibleEntities)) continue;
-            targets.add(le);
+            if (!(entity instanceof LivingEntity living)) continue;
+            if (living instanceof PlayerEntity) continue;
+            if (living.isRemoved() || living.getHealth() <= 0) continue;
+            if (mc.player.squaredDistanceTo(living) > ATTACK_RANGE_SQR) continue;
+
+            mc.interactionManager.attackEntity(mc.player, living);
+            mc.player.swingHand(Hand.MAIN_HAND);
         }
-
-        targets.sort(Comparator.comparingDouble(e -> mc.player.squaredDistanceTo(e)));
-        int max = maxTargets.get();
-        if (targets.size() > max) targets = new ArrayList<>(targets.subList(0, max));
-        return targets;
     }
 
-    private boolean isInArea(LivingEntity entity) {
-        Vector3d pos1 = areaPos1.get();
-        Vector3d pos2 = areaPos2.get();
-        double minX = Math.min(pos1.x, pos2.x), maxX = Math.max(pos1.x, pos2.x);
-        double minY = Math.min(pos1.y, pos2.y), maxY = Math.max(pos1.y, pos2.y);
-        double minZ = Math.min(pos1.z, pos2.z), maxZ = Math.max(pos1.z, pos2.z);
+    private void discardDisabledMaterials() {
+        if (mc.currentScreen != null) return;
+        if (keepDiamond.get() && keepGolden.get() && keepCopper.get()) return;
 
-        double x = entity.getX(), y = entity.getY(), z = entity.getZ();
-        return x >= minX && x <= maxX && y >= minY && y <= maxY && z >= minZ && z <= maxZ;
-    }
+        PlayerInventory inventory = mc.player.getInventory();
+        ScreenHandler handler = mc.player.playerScreenHandler;
+        for (Slot slot : handler.slots) {
+            if (slot.inventory != inventory) continue;
+            if (slot.getIndex() < 0 || slot.getIndex() >= PlayerInventory.MAIN_SIZE) continue;
 
-    private boolean hasBlockedName(LivingEntity entity, Iterable<Entity> nearbyEntities) {
-        if (isBlockedName(getEntityName(entity))) return true;
+            ItemStack stack = slot.getStack();
+            if (stack.isEmpty() || !shouldDiscard(stack)) continue;
 
-        // Many servers render a mob's title as a separate entity above the actual mob.
-        for (Entity nearby : nearbyEntities) {
-            if (nearby == entity || nearby.isRemoved()) continue;
-            double dx = nearby.getX() - entity.getX();
-            double dz = nearby.getZ() - entity.getZ();
-            if (dx * dx + dz * dz > 16.0) continue;
-            if (nearby.getY() < entity.getY() - 3.0 || nearby.getY() > entity.getY() + 8.0) continue;
-            if (isBlockedName(getEntityName(nearby))) return true;
+            mc.interactionManager.clickSlot(handler.syncId, slot.id, 1, SlotActionType.THROW, mc.player);
+            return;
         }
-
-        return false;
     }
 
-    private boolean isBlockedName(String name) {
-        String lower = name.toLowerCase();
-        if (lower.contains("bot")) return true;
-        for (String blocked : BLOCKED_NAMES) {
-            if (name.contains(blocked)) return true;
-        }
-        return false;
+    private boolean shouldDiscard(ItemStack stack) {
+        String itemId = Registries.ITEM.getId(stack.getItem()).getPath().toLowerCase(Locale.ROOT);
+        String displayName = stack.getName().getString().toLowerCase(Locale.ROOT);
+
+        if (!keepDiamond.get() && matchesMaterial(itemId, displayName, "diamond", "钻石")) return true;
+        if (!keepGolden.get() && matchesMaterial(itemId, displayName, "gold", "金")) return true;
+        return !keepCopper.get() && matchesMaterial(itemId, displayName, "copper", "铜");
     }
 
-    private String getEntityName(Entity entity) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(entity.getName().getString());
-        sb.append('|').append(entity.getNameForScoreboard());
-        if (entity.hasCustomName()) {
-            sb.append('|').append(entity.getCustomName().getString());
-        }
-        sb.append('|').append(entity.getDisplayName().getString());
-        return sb.toString().replace("\u00a7", "");
-    }
-
-    private void doAttack(LivingEntity target) {
-        if (mc.world == null || target.isRemoved() || hasBlockedName(target, mc.world.getEntities())) return;
-        if (mc.player.getAttackCooldownProgress(0.5f) < 0.9f) return;
-        mc.interactionManager.attackEntity(mc.player, target);
-        mc.player.swingHand(Hand.MAIN_HAND);
+    private boolean matchesMaterial(String itemId, String displayName, String english, String chinese) {
+        return itemId.contains(english) || displayName.contains(english) || displayName.contains(chinese);
     }
 }
