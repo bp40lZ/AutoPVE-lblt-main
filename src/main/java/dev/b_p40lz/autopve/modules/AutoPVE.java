@@ -159,9 +159,8 @@ public class AutoPVE extends Module {
         .build()
     );
 
-    private static final Vec3d INIT_WAYPOINT_1 = new Vec3d(25, 20, 30);
-    private static final Vec3d INIT_WAYPOINT_2 = new Vec3d(20, 38, 30);
-    private static final Vec3d INIT_WAYPOINT_3 = new Vec3d(-158, 40, 30);
+    private static final Vec3d INIT_WAYPOINT_1 = new Vec3d(20, 22, 27);
+    private static final Vec3d INIT_WAYPOINT_2 = new Vec3d(20, 38, 27);
     private static final double ROUTE_ARRIVAL_DISTANCE_SQR = 2.25;
     private static final double ATTACK_RANGE_SQR = 25.0;
     private static final int PVE_MENU_SLOT = 15;
@@ -251,7 +250,7 @@ public class AutoPVE extends Module {
         Vec3d target = switch (routePhase) {
             case INIT_WAYPOINT_1 -> INIT_WAYPOINT_1;
             case INIT_WAYPOINT_2 -> INIT_WAYPOINT_2;
-            case INIT_WAYPOINT_3 -> INIT_WAYPOINT_3;
+            case INIT_WAYPOINT_3 -> getInitWaypoint3();
             case ENTER_LOOP -> getRoutePoint(routeEnd);
             case LOOP -> throw new IllegalStateException("Loop phase handled separately");
         };
@@ -282,6 +281,10 @@ public class AutoPVE extends Module {
     private Vec3d getRoutePoint(Setting<Vector3d> setting) {
         Vector3d v = setting.get();
         return new Vec3d(v.x, v.y, v.z);
+    }
+
+    private Vec3d getInitWaypoint3() {
+        return new Vec3d(getRoutePoint(routeStart).x, 40, 30);
     }
 
     private void resetRoute() {
@@ -485,6 +488,7 @@ public class AutoPVE extends Module {
     }
 
     private boolean matchesIngot(String itemId, String displayName, String english, String chineseIngot) {
+        if (itemId.contains("alloy") || displayName.contains("alloy") || displayName.contains("合金")) return false;
         return itemId.contains(english + "_ingot") || displayName.contains(english + " ingot") || displayName.contains(chineseIngot);
     }
 
