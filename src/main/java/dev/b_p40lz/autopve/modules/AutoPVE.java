@@ -480,8 +480,12 @@ public class AutoPVE extends Module {
         String displayName = stack.getName().getString().toLowerCase(Locale.ROOT);
 
         if (!keepDiamond.get() && matchesMaterial(itemId, displayName, "diamond", "钻石")) return true;
-        if (!keepGolden.get() && matchesMaterial(itemId, displayName, "gold", "金") && !displayName.contains("合金")) return true;
-        return !keepCopper.get() && matchesMaterial(itemId, displayName, "copper", "铜");
+        if (!keepGolden.get() && matchesIngot(itemId, displayName, "gold", "金锭")) return true;
+        return !keepCopper.get() && matchesIngot(itemId, displayName, "copper", "铜锭");
+    }
+
+    private boolean matchesIngot(String itemId, String displayName, String english, String chineseIngot) {
+        return itemId.contains(english + "_ingot") || displayName.contains(english + " ingot") || displayName.contains(chineseIngot);
     }
 
     private boolean matchesMaterial(String itemId, String displayName, String english, String chinese) {

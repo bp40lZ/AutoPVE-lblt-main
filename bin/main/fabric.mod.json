@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "autopve",
+  "version": "${version}",
+  "name": "AutoPVE",
+  "description": "An addon for Meteor Client.",
+  "authors": [
+    "b_p40lz"
+  ],
+  "contact": {
+    "sources": "https://github.com/bp40lZ/AutoPVE-lblt-main"
+  },
+  "icon": "assets/autopve/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "meteor": [
+      "dev.b_p40lz.autopve.AddonTemplate"
+    ]
+  },
+  "mixins": [
+    "autopve.mixins.json"
+  ],
+  "custom": {
+    "meteor-client:color": "225,25,25",
+    "modmenu": {
+      "parent": {
+        "id": "meteor-client"
+      }
+    }
+  },
+  "depends": {
+    "java": ">=21",
+    "minecraft": ["${mc_version}"],
+    "meteor-client": "*"
+  }
+}
