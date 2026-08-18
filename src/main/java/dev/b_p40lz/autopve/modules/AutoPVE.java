@@ -15,6 +15,7 @@ import meteordevelopment.meteorclient.settings.IntSetting;//
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.StringSetting;
+import meteordevelopment.meteorclient.settings.Vector3dSetting;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
@@ -40,9 +41,12 @@ import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.Vec3d;
 import org.apache.commons.lang3.tuple.Pair;
+import org.joml.Vector3d;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.Locale;
+
+//b_p40lz是作者 我操你妈的。别拿去倒卖了。//
 
 public class AutoPVE extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -82,9 +86,9 @@ public class AutoPVE extends Module {
     private final Setting<Double> flightSpeed = sgGeneral.add(new DoubleSetting.Builder()
         .name("flight-speed")
         .description("Velocity used while flying between route points.")
-        .defaultValue(9)
-        .range(0.05, 10.0)
-        .sliderRange(0.05, 12.0)
+        .defaultValue(15)
+        .range(0.05, 30.0)
+        .sliderRange(0.05, 30.0)
         .build()
     );
 
@@ -101,6 +105,15 @@ public class AutoPVE extends Module {
         .description("Delay in seconds before right-clicking the nether star after login.")
         .defaultValue(1)
         .range(0, 10)
+        .build()
+    );
+
+    private final Setting<Integer> maxTarget = sgGeneral.add(new IntSetting.Builder()
+        .name("max-target")
+        .description("Maximum number of mobs attacked at once.")
+        .defaultValue(10)
+        .range(1, 100)
+        .sliderMax(50)
         .build()
     );
 
@@ -132,11 +145,23 @@ public class AutoPVE extends Module {
         .build()
     );
 
+    private final Setting<Vector3d> routeStart = sgGeneral.add(new Vector3dSetting.Builder()
+        .name("pos-1")
+        .description("pos1.")
+        .defaultValue(-158, 15.1, 68)
+        .build()
+    );
+
+    private final Setting<Vector3d> routeEnd = sgGeneral.add(new Vector3dSetting.Builder()
+        .name("pos-2")
+        .description("pos2.")
+        .defaultValue(-158, 15.1, 0)
+        .build()
+    );
+
     private static final Vec3d INIT_WAYPOINT_1 = new Vec3d(25, 20, 30);
     private static final Vec3d INIT_WAYPOINT_2 = new Vec3d(20, 38, 30);
-    private static final Vec3d INIT_WAYPOINT_3 = new Vec3d(-100, 40, 30);
-    private static final Vec3d ROUTE_START = new Vec3d(-100, 17.1, 65);
-    private static final Vec3d ROUTE_END = new Vec3d(-100, 17.1, 0);
+    private static final Vec3d INIT_WAYPOINT_3 = new Vec3d(-158, 40, 30);
     private static final double ROUTE_ARRIVAL_DISTANCE_SQR = 2.25;
     private static final double ATTACK_RANGE_SQR = 25.0;
     private static final int PVE_MENU_SLOT = 15;
@@ -163,7 +188,7 @@ public class AutoPVE extends Module {
     }
 
     public AutoPVE() {
-        super(AddonTemplate.CATEGORY, "auto-pve", "autopve");
+        super(AddonTemplate.CATEGORY, "Auto-PVE", "autopve");
         runInMainMenu = true;
     }
 
@@ -200,7 +225,7 @@ public class AutoPVE extends Module {
             return;
         }
 
-        Vec3d target = headingToRouteEnd ? ROUTE_END : ROUTE_START;
+        Vec3d target = headingToRouteEnd ? getRoutePoint(routeEnd) : getRoutePoint(routeStart);
         if (mc.player.squaredDistanceTo(target) <= ROUTE_ARRIVAL_DISTANCE_SQR) {
             headingToRouteEnd = !headingToRouteEnd;
             stopRouteMovement();
@@ -213,10 +238,10 @@ public class AutoPVE extends Module {
     private void initializeRoutePhase() {
         if (routePhase != RoutePhase.INIT_WAYPOINT_1) return;
 
-        if (mc.player.squaredDistanceTo(ROUTE_START) <= ROUTE_ARRIVAL_DISTANCE_SQR) {
+        if (mc.player.squaredDistanceTo(getRoutePoint(routeStart)) <= ROUTE_ARRIVAL_DISTANCE_SQR) {
             routePhase = RoutePhase.LOOP;
             headingToRouteEnd = true;
-        } else if (mc.player.squaredDistanceTo(ROUTE_END) <= ROUTE_ARRIVAL_DISTANCE_SQR) {
+        } else if (mc.player.squaredDistanceTo(getRoutePoint(routeEnd)) <= ROUTE_ARRIVAL_DISTANCE_SQR) {
             routePhase = RoutePhase.LOOP;
             headingToRouteEnd = false;
         }
@@ -227,7 +252,7 @@ public class AutoPVE extends Module {
             case INIT_WAYPOINT_1 -> INIT_WAYPOINT_1;
             case INIT_WAYPOINT_2 -> INIT_WAYPOINT_2;
             case INIT_WAYPOINT_3 -> INIT_WAYPOINT_3;
-            case ENTER_LOOP -> ROUTE_END;
+            case ENTER_LOOP -> getRoutePoint(routeEnd);
             case LOOP -> throw new IllegalStateException("Loop phase handled separately");
         };
 
@@ -252,6 +277,11 @@ public class AutoPVE extends Module {
         double speed = Math.min(flightSpeed.get(), difference.length());
         mc.player.setVelocity(difference.normalize().multiply(speed));
         mc.player.setOnGround(false);
+    }
+
+    private Vec3d getRoutePoint(Setting<Vector3d> setting) {
+        Vector3d v = setting.get();
+        return new Vec3d(v.x, v.y, v.z);
     }
 
     private void resetRoute() {
@@ -291,11 +321,13 @@ public class AutoPVE extends Module {
     private void onMessageReceive(ReceiveMessageEvent event) {
         if (!autoLogin.get() || loggedIn) return;
         if (mc.player == null) return;
-        if (password.get().isEmpty()) return;
 
         if (event.getMessage().getString().contains("欢迎玩家")) {
             loggedIn = true;
-            ChatUtils.sendPlayerMsg("/login " + password.get());
+            String pwd = password.get();
+            if (!pwd.isEmpty()) {
+                ChatUtils.sendPlayerMsg("/login " + pwd);
+            }
             loginSelectPending = true;
             selectTimer.reset();
         }
@@ -411,6 +443,7 @@ public class AutoPVE extends Module {
     }
 
     private void attackNearbyEntities() {
+        int attacked = 0;
         for (Entity entity : mc.world.getEntities()) {
             if (entity instanceof ItemEntity) continue;
             if (!(entity instanceof LivingEntity living)) continue;
@@ -420,6 +453,7 @@ public class AutoPVE extends Module {
 
             mc.interactionManager.attackEntity(mc.player, living);
             mc.player.swingHand(Hand.MAIN_HAND);
+            if (++attacked >= maxTarget.get()) break;
         }
     }
 
@@ -446,7 +480,7 @@ public class AutoPVE extends Module {
         String displayName = stack.getName().getString().toLowerCase(Locale.ROOT);
 
         if (!keepDiamond.get() && matchesMaterial(itemId, displayName, "diamond", "钻石")) return true;
-        if (!keepGolden.get() && matchesMaterial(itemId, displayName, "gold", "金")) return true;
+        if (!keepGolden.get() && matchesMaterial(itemId, displayName, "gold", "金") && !displayName.contains("合金")) return true;
         return !keepCopper.get() && matchesMaterial(itemId, displayName, "copper", "铜");
     }
 
